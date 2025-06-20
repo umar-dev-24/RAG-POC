@@ -1,0 +1,15 @@
+# Core AI and RAG functionality
+langchain>=0.0.235
+langchain-community>=0.0.100
+chromadb>=0.3.25
+fastembed>=0.1.0
+
+# Ollama local LLM support
+ollama>=0.5.1
+
+# PDF loading
+PyPDF2>=3.0.0
+pypdf>=3.10.0
+
+# (Optional CLI support) For reading environment variables
+python-dotenv>=1.0.0
