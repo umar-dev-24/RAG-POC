@@ -19,15 +19,35 @@ def main():
     qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
 
     print("✅ Ready! Ask questions (type 'exit' to quit)\n")
+    
     while True:
         q = input("You: ").strip()
         if q.lower() in ("exit", "quit"):
             break
+            
         print("AI: ", end="", flush=True)
 
-        # Stream output via callback
-        result = qa.invoke({"query": q})  # the actual answer will stream automatically
-
+        # Get the answer and retrieve source documents
+        result = qa.invoke({"query": q})
+        
+        # Get the source documents used for the answer
+        docs = retriever.get_relevant_documents(q)
+        
+        # Display source information
+        if docs:
+            print(f"\n📚 Sources:")
+            sources = {}
+            for doc in docs:
+                source = doc.metadata.get('source', 'Unknown')
+                page = doc.metadata.get('page', 'Unknown')
+                if source not in sources:
+                    sources[source] = set()
+                sources[source].add(page)
+            
+            for source, pages in sources.items():
+                page_list = sorted(list(pages))
+                print(f"   📄 {source} (Pages: {', '.join(map(str, page_list))})")
+        
         print()  # newline after completion
 
 if __name__ == "__main__":
