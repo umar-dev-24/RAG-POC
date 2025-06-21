@@ -6,7 +6,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.chat_models import ChatOllama
 from langchain.chains import RetrievalQA
 from langchain.schema import Document
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
 import importlib.util
 import sys
 
@@ -16,6 +16,16 @@ file_ingestion = importlib.util.module_from_spec(spec)
 sys.modules["file_ingestion"] = file_ingestion
 spec.loader.exec_module(file_ingestion)
 ingest = file_ingestion.ingest
+
+# Custom streaming callback for Streamlit
+class StreamlitStreamingCallback(BaseCallbackHandler):
+    def __init__(self, container):
+        self.container = container
+        self.text = ""
+        
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.text += token
+        self.container.markdown(self.text + "▌")
 
 # Page configuration
 st.set_page_config(
@@ -44,11 +54,10 @@ def initialize_rag():
         vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
         retriever = vectordb.as_retriever()
 
-        # Set up local Mistral model via Ollama with streaming callbacks
+        # Set up local Phi3 model via Ollama with streaming callbacks
         llm = ChatOllama(
-            model="mistral",
+            model="phi3",
             streaming=True,  # enable token-level streaming
-            callbacks=[StreamingStdOutCallbackHandler()]
         )
 
         qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
@@ -178,15 +187,34 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    # Get answer using the same logic as query.py
-                    result = st.session_state.qa_chain.invoke({"query": prompt})
+                    # Create streaming container
+                    response_container = st.empty()
+                    
+                    # Create streaming callback
+                    streaming_callback = StreamlitStreamingCallback(response_container)
+                    
+                    # Create new LLM instance with streaming callback
+                    streaming_llm = ChatOllama(
+                        model="phi3",
+                        streaming=True,
+                        callbacks=[streaming_callback]
+                    )
+                    
+                    # Create temporary QA chain with streaming LLM
+                    temp_qa_chain = RetrievalQA.from_chain_type(
+                        llm=streaming_llm, 
+                        retriever=st.session_state.retriever
+                    )
+                    
+                    # Get answer using streaming
+                    result = temp_qa_chain.invoke({"query": prompt})
                     answer = result.get("result", "Sorry, I couldn't generate an answer.")
+                    
+                    # Update the container with final answer (remove cursor)
+                    response_container.markdown(answer)
                     
                     # Get source documents using the same logic as query.py
                     docs = st.session_state.retriever.get_relevant_documents(prompt)
-                    
-                    # Display answer
-                    st.markdown(answer)
                     
                     # Add assistant message to chat history
                     st.session_state.messages.append({
