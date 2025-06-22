@@ -23,11 +23,9 @@ def ingest(pdf_path: str, persist_dir: str = "chroma_db"):
     for chunk in chunks:
         # Add source filename metadata
         chunk.metadata["source"] = source_filename
-        
-        # Add page number if available (PDFs typically have page metadata)
-        if "page" not in chunk.metadata:
-            # Try to extract page from existing metadata or set default
-            chunk.metadata["page"] = chunk.metadata.get("page", 1)
+        # Ensure page numbers start from 1 (not 0)
+        page = chunk.metadata.get("page", 0)
+        chunk.metadata["page"] = page + 1
     
     # 4️⃣ Embed and store with metadata
     embeddings = FastEmbedEmbeddings()
