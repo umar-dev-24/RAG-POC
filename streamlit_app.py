@@ -3,15 +3,31 @@ import os
 from pathlib import Path
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from langchain.chains import RetrievalQA
 from langchain.schema import Document
 from langchain.callbacks.base import BaseCallbackHandler
 import importlib.util
 import sys
+from langchain.prompts import PromptTemplate
+import difflib
+
+# Define prompt_template at the top level so it is available everywhere
+prompt_template = '''
+Use ONLY the following context to answer the question. If the answer is not in the context, say "I don't know."
+At the end of your answer, cite the source and page in this exact format: [source: filename, page X]
+
+Context:
+{context}
+
+Question: {question}
+Answer:
+'''
 
 # Import existing functions
 spec = importlib.util.spec_from_file_location("file_ingestion", "file-ingestion.py")
+if spec is None or spec.loader is None:
+    raise ImportError("Could not load file-ingestion.py module spec.")
 file_ingestion = importlib.util.module_from_spec(spec)
 sys.modules["file_ingestion"] = file_ingestion
 spec.loader.exec_module(file_ingestion)
@@ -48,19 +64,28 @@ if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
 
 def initialize_rag():
-    """Initialize the RAG components - reusing logic from query.py"""
+    """Initialize the RAG components - reusing logic from query.py, but with strict context prompt."""
     try:
         embeddings = FastEmbedEmbeddings()
         vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
         retriever = vectordb.as_retriever()
 
-        # Set up local Phi3 model via Ollama with streaming callbacks
+        # Set up local Phi3 model via Ollama
         llm = ChatOllama(
-            model="phi3",
-            streaming=True,  # enable token-level streaming
+            model="phi3"
         )
 
-        qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
+        prompt = PromptTemplate(
+            input_variables=["context", "question"],
+            template=prompt_template,
+        )
+
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=retriever,
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": prompt}
+        )
         
         return vectordb, retriever, qa_chain
     except Exception as e:
@@ -89,33 +114,8 @@ def process_file_upload(uploaded_file):
     except Exception as e:
         return False, f"❌ Error processing file: {e}"
 
-def display_sources(docs):
-    """Display source documents with metadata - reusing logic from query.py"""
-    if not docs:
-        return
-    
-    st.markdown("### 📚 Sources Used")
-    
-    sources = {}
-    for doc in docs:
-        source = doc.metadata.get('source', 'Unknown')
-        page = doc.metadata.get('page', 'Unknown')
-        if source not in sources:
-            sources[source] = set()
-        sources[source].add(page)
-    
-    for source, pages in sources.items():
-        page_list = sorted(list(pages))
-        st.markdown(f"**📄 {source}** (Pages: {', '.join(map(str, page_list))})")
-        
-        # Show a preview of the content
-        with st.expander(f"Preview content from {source}"):
-            for doc in docs:
-                if doc.metadata.get('source') == source:
-                    st.text(doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content)
-
 # Main UI
-st.title("🤖 RAG Chat Assistant")
+st.title("🤖 RAG Chat")
 st.markdown("Ask questions about your documents and get AI-powered answers with source citations!")
 
 # Sidebar for file upload
@@ -147,7 +147,7 @@ with st.sidebar:
         try:
             vectordb = Chroma(persist_directory="chroma_db", embedding_function=FastEmbedEmbeddings())
             count = vectordb._collection.count()
-            st.success(f"✅ Database loaded with {count} documents")
+            st.success(f"✅ Database loaded with {count} chunks")
         except:
             st.warning("⚠️ Database exists but may be corrupted")
     else:
@@ -165,72 +165,46 @@ st.markdown("### 💬 Chat Interface")
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        
-        # Display sources for assistant messages
-        if message["role"] == "assistant" and "sources" in message:
-            display_sources(message["sources"])
 
 # Chat input
 if prompt := st.chat_input("Ask a question about your documents..."):
-    # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    # Display user message
     with st.chat_message("user"):
         st.markdown(prompt)
-    
-    # Check if RAG is initialized
     if st.session_state.qa_chain is None:
         st.error("❌ RAG system not initialized. Please upload some documents first.")
     else:
-        # Display assistant message
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    # Create streaming container
                     response_container = st.empty()
-                    
-                    # Create streaming callback
                     streaming_callback = StreamlitStreamingCallback(response_container)
-                    
-                    # Create new LLM instance with streaming callback
                     streaming_llm = ChatOllama(
-                        model="phi3",
-                        streaming=True,
+                        model="mistral",
                         callbacks=[streaming_callback]
                     )
-                    
-                    # Create temporary QA chain with streaming LLM
-                    temp_qa_chain = RetrievalQA.from_chain_type(
-                        llm=streaming_llm, 
-                        retriever=st.session_state.retriever
+                    prompt_obj = PromptTemplate(
+                        input_variables=["context", "question"],
+                        template=prompt_template,
                     )
-                    
-                    # Get answer using streaming
+                    temp_qa_chain = RetrievalQA.from_chain_type(
+                        llm=streaming_llm,
+                        retriever=st.session_state.retriever,
+                        chain_type="stuff",
+                        chain_type_kwargs={"prompt": prompt_obj}
+                    )
                     result = temp_qa_chain.invoke({"query": prompt})
                     answer = result.get("result", "Sorry, I couldn't generate an answer.")
-                    
-                    # Update the container with final answer (remove cursor)
                     response_container.markdown(answer)
-                    
-                    # Get source documents using the same logic as query.py
-                    docs = st.session_state.retriever.get_relevant_documents(prompt)
-                    
-                    # Add assistant message to chat history
                     st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": answer,
-                        "sources": docs
+                        "role": "assistant",
+                        "content": answer
                     })
-                    
-                    # Display sources using the same logic as query.py
-                    display_sources(docs)
-                    
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
                     st.error(error_msg)
                     st.session_state.messages.append({
-                        "role": "assistant", 
+                        "role": "assistant",
                         "content": error_msg
                     })
 
