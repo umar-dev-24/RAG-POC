@@ -72,7 +72,7 @@ def initialize_rag():
 
         # Set up local Phi3 model via Ollama
         llm = ChatOllama(
-            model="phi3"
+            model="mistral"
         )
 
         prompt = PromptTemplate(
