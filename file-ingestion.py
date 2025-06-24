@@ -7,7 +7,7 @@ def ingest(pdf_path: str, persist_dir: str = "chroma_db"):
     # 1️⃣ Load the PDF
     docs = PyPDFLoader(pdf_path).load()
     # 2️⃣ Split into chunks
-    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
     # 3️⃣ Embed and store
     embeddings = FastEmbedEmbeddings()
