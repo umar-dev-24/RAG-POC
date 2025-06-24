@@ -6,6 +6,7 @@ fastembed>=0.1.0
 
 # Ollama local LLM support
 ollama>=0.5.1
+langchain-ollama>=0.0.6
 
 # PDF loading
 PyPDF2>=3.0.0
