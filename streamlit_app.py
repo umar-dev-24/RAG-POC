@@ -63,11 +63,27 @@ if "retriever" not in st.session_state:
 if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
 
+if "initialization_attempted" not in st.session_state:
+    st.session_state.initialization_attempted = False
+
 def initialize_rag():
     """Initialize the RAG components - reusing logic from query.py, but with strict context prompt."""
     try:
+        # Check if database exists and has data
+        if not os.path.exists("chroma_db"):
+            return None, None, None, "no_database"
+            
         embeddings = FastEmbedEmbeddings()
         vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
+        
+        # Check if database has any documents
+        try:
+            results = vectordb.get()
+            if not results or not results.get('documents') or len(results['documents']) == 0:
+                return None, None, None, "empty_database"
+        except Exception as e:
+            return None, None, None, f"database_error:{str(e)}"
+            
         retriever = vectordb.as_retriever()
 
         # Set up local Phi3 model via Ollama
@@ -87,10 +103,9 @@ def initialize_rag():
             chain_type_kwargs={"prompt": prompt}
         )
         
-        return vectordb, retriever, qa_chain
+        return vectordb, retriever, qa_chain, "success"
     except Exception as e:
-        st.error(f"Error initializing RAG: {e}")
-        return None, None, None
+        return None, None, None, f"initialization_error:{str(e)}"
 
 def process_file_upload(uploaded_file):
     """Process uploaded file and ingest into vector database - reusing ingest function"""
@@ -108,7 +123,9 @@ def process_file_upload(uploaded_file):
         ingest(str(file_path))
         
         # Reinitialize RAG components
-        st.session_state.vectordb, st.session_state.retriever, st.session_state.qa_chain = initialize_rag()
+        st.session_state.initialization_attempted = False  # Reset flag to allow reinitialization
+        result = initialize_rag()
+        st.session_state.vectordb, st.session_state.retriever, st.session_state.qa_chain, status = result
         
         return True, f"✅ Successfully ingested {uploaded_file.name}"
     except Exception as e:
@@ -142,20 +159,51 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📊 Database Status")
     
-    # Check if ChromaDB exists
+    # Check if ChromaDB exists and is properly initialized
     if os.path.exists("chroma_db"):
         try:
-            vectordb = Chroma(persist_directory="chroma_db", embedding_function=FastEmbedEmbeddings())
-            count = vectordb._collection.count()
-            st.success(f"✅ Database loaded with {count} chunks")
-        except:
-            st.warning("⚠️ Database exists but may be corrupted")
+            # Initialize embeddings
+            embeddings = FastEmbedEmbeddings()
+            vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
+            
+            # Get collection count - try different methods
+            try:
+                # Method 1: Try to get count from collection
+                count = vectordb._collection.count()
+                st.success(f"✅ Database loaded with {count} chunks")
+            except AttributeError:
+                try:
+                    # Method 2: Try to get count using get method
+                    results = vectordb.get()
+                    count = len(results['documents']) if results and 'documents' in results else 0
+                    st.success(f"✅ Database loaded with {count} chunks")
+                except Exception:
+                    # Method 3: Just indicate database exists
+                    st.success("✅ Database loaded successfully")
+                    
+        except Exception as e:
+            st.warning(f"⚠️ Database exists but may be corrupted: {str(e)}")
     else:
         st.info("ℹ️ No database found. Upload documents to get started!")
 
 # Initialize RAG components if not already done
-if st.session_state.vectordb is None:
-    st.session_state.vectordb, st.session_state.retriever, st.session_state.qa_chain = initialize_rag()
+if st.session_state.vectordb is None and not st.session_state.initialization_attempted:
+    st.session_state.initialization_attempted = True
+    with st.spinner("🔄 Initializing RAG system..."):
+        result = initialize_rag()
+        st.session_state.vectordb, st.session_state.retriever, st.session_state.qa_chain, status = result
+        
+        # Handle different status messages
+        if status == "no_database":
+            st.info("ℹ️ No database found. Please upload documents to get started with the RAG system.")
+        elif status == "empty_database":
+            st.info("ℹ️ Database exists but is empty. Please upload documents to get started with the RAG system.")
+        elif status.startswith("database_error:"):
+            st.warning(f"⚠️ Database error: {status.split(':', 1)[1]}")
+        elif status.startswith("initialization_error:"):
+            st.error(f"❌ Initialization error: {status.split(':', 1)[1]}")
+        elif status == "success":
+            st.success("✅ RAG system initialized successfully!")
 
 # Chat interface
 st.markdown("---")
